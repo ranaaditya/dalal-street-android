@@ -24,10 +24,10 @@ import android.view.MenuItem
 import android.view.View
 import android.widget.ImageView
 import android.widget.TextView
+import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.GravityCompat
-import androidx.core.view.MenuItemCompat
 import androidx.drawerlayout.widget.DrawerLayout
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
@@ -38,6 +38,10 @@ import androidx.navigation.fragment.NavHostFragment
 import androidx.navigation.ui.AppBarConfiguration
 import androidx.navigation.ui.setupActionBarWithNavController
 import androidx.navigation.ui.setupWithNavController
+import com.google.android.gms.tasks.OnCompleteListener
+import com.google.firebase.ktx.Firebase
+import com.google.firebase.messaging.FirebaseMessaging
+import com.google.firebase.messaging.ktx.messaging
 import dalalstreet.api.DalalActionServiceGrpc
 import dalalstreet.api.DalalStreamServiceGrpc
 import dalalstreet.api.actions.GetMortgageDetailsRequest
@@ -74,25 +78,7 @@ import org.pragyan.dalal18.databinding.ActivityMainBinding
 import org.pragyan.dalal18.notifications.NotificationFragment
 import org.pragyan.dalal18.notifications.PushNotificationService
 import org.pragyan.dalal18.utils.*
-import org.pragyan.dalal18.utils.Constants.EMAIL_KEY
-import org.pragyan.dalal18.utils.Constants.HOST
-import org.pragyan.dalal18.utils.Constants.MARKET_OPEN_KEY
-import org.pragyan.dalal18.utils.Constants.NOTIFICATION_NEWS_SHARED_PREF
-import org.pragyan.dalal18.utils.Constants.NOTIFICATION_SHARED_PREF
-import org.pragyan.dalal18.utils.Constants.PASSWORD_KEY
-import org.pragyan.dalal18.utils.Constants.PORT
-import org.pragyan.dalal18.utils.Constants.PREF_COMP
-import org.pragyan.dalal18.utils.Constants.PREF_MAIN
-import org.pragyan.dalal18.utils.Constants.PRICE_FORMAT
-import org.pragyan.dalal18.utils.Constants.REFRESH_MARKET_EVENTS_FOR_HOME_AND_NEWS
-import org.pragyan.dalal18.utils.Constants.REFRESH_OWNED_STOCKS_FOR_ALL
-import org.pragyan.dalal18.utils.Constants.REFRESH_PRICE_TICKER_FOR_HOME
-import org.pragyan.dalal18.utils.Constants.REFRESH_STOCKS_EXCHANGE_FOR_COMPANY
-import org.pragyan.dalal18.utils.Constants.REFRESH_STOCKS_FOR_MORTGAGE
-import org.pragyan.dalal18.utils.Constants.REFRESH_STOCK_PRICES_FOR_ALL
-import org.pragyan.dalal18.utils.Constants.SESSION_KEY
-import org.pragyan.dalal18.utils.Constants.STOP_NOTIFICATION_ACTION
-import org.pragyan.dalal18.utils.Constants.USERNAME_KEY
+import org.pragyan.dalal18.utils.Constants.*
 import org.pragyan.dalal18.utils.MiscellaneousUtils.buildCounterDrawable
 import java.text.DecimalFormat
 import java.util.*
@@ -157,7 +143,7 @@ class MainActivity : AppCompatActivity(), ConnectionUtils.OnNetworkDownHandler {
 
                 GAME_STATE_UPDATE_ACTION -> {
                     val gameStateDetails = intent.getParcelableExtra<GameStateDetails>(GAME_STATE_KEY)
-                    if(gameStateDetails != null)
+                    if (gameStateDetails != null)
                         Log.i(TAG, "onReceived() called gameStateType " + gameStateDetails.gameStateUpdateType)
                     if (gameStateDetails != null) when (gameStateDetails.gameStateUpdateType) {
                         GameStateUpdateType.MarketStateUpdate ->
@@ -178,7 +164,7 @@ class MainActivity : AppCompatActivity(), ConnectionUtils.OnNetworkDownHandler {
                             changeTextViewValue(binding.cashWorthTextView, binding.cashIndicatorImageView, cashWorth)
                             changeTextViewValue(binding.totalWorthTextView, binding.totalIndicatorImageView, totalWorth)
                         }
-                        GameStateUpdateType.UserRewardCreditUpdate->{
+                        GameStateUpdateType.UserRewardCreditUpdate -> {
 
                             toast("Reward claimed!")
                             val gameState = intent.getParcelableExtra<GameStateDetails>(GAME_STATE_KEY)
@@ -260,11 +246,15 @@ class MainActivity : AppCompatActivity(), ConnectionUtils.OnNetworkDownHandler {
         this.startService(Intent(this.baseContext, PushNotificationService::class.java))
 
         binding.marketCloseIndicatorTextView.isSelected = true
+
+        updateFCMToken()
+        subscribeToCommonFCMStream()
+        subscribeToSpecificUserFCMStream()
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        inAppUpdate.onActivityResult(requestCode,resultCode, data)
+        inAppUpdate.onActivityResult(requestCode, resultCode, data)
     }
 
     // Adding and setting up Navigation drawer
@@ -274,7 +264,7 @@ class MainActivity : AppCompatActivity(), ConnectionUtils.OnNetworkDownHandler {
 
         val appBarConfig = AppBarConfiguration.Builder(setOf(R.id.home_dest, R.id.companies_dest, R.id.portfolio_dest,
                 R.id.exchange_dest, R.id.market_depth_dest, R.id.trade_dest, R.id.main_mortgage_dest, R.id.news_dest,
-                R.id.leaderboard_dest, R.id.dailyChallenge_dest,R.id.open_orders_dest, R.id.transactions_dest, R.id.notifications_dest, R.id.refer_and_earn_dest))
+                R.id.leaderboard_dest, R.id.dailyChallenge_dest, R.id.open_orders_dest, R.id.transactions_dest, R.id.notifications_dest, R.id.refer_and_earn_dest))
                 .setDrawerLayout(binding.mainDrawerLayout)
                 .build()
 
@@ -793,6 +783,55 @@ class MainActivity : AppCompatActivity(), ConnectionUtils.OnNetworkDownHandler {
             mChannel.lightColor = Color.RED
             nm.createNotificationChannel(mChannel)
         }
+    }
+
+    private fun updateFCMToken() {
+        FirebaseMessaging.getInstance().token.addOnCompleteListener(OnCompleteListener { task ->
+            if (!task.isSuccessful) {
+                Log.w(TAG, "Fetching FCM registration token failed", task.exception)
+                return@OnCompleteListener
+            }
+
+            // Get new FCM registration token
+            val token = task.result
+
+            // Log and toast
+            USER_FCM_TOKEN = token.toString()
+            Log.d("FCM token - ", USER_FCM_TOKEN)
+            // Toast.makeText(this@MainActivity, "Token updated !", Toast.LENGTH_LONG).show()
+        })
+    }
+
+    private fun subscribeToCommonFCMStream() {
+
+        Firebase.messaging.subscribeToTopic(DALAL_COMMON_FCM_REGISTRATION_KEY)
+                .addOnCompleteListener { task ->
+                    if (!task.isSuccessful) {
+                        Log.d("UNABLE TO REGISTER FROM", "COMMON FCM STREAM")
+                    }
+                    Log.d("SUCCESSFULLY REG TO", "COMMON FCM STREAM")
+                }
+
+    }
+
+    private fun subscribeToSpecificUserFCMStream() {
+
+        // will be changed to user_id
+        USER_SPECIFIC_FCM_REGISTRATION_KEY = this.preferences.getString(EMAIL_KEY, "")
+        val index = USER_SPECIFIC_FCM_REGISTRATION_KEY!!.indexOf("@")
+        USER_SPECIFIC_FCM_REGISTRATION_KEY = USER_SPECIFIC_FCM_REGISTRATION_KEY.substring(0, index)
+
+        Log.d("SUBSTRING", USER_SPECIFIC_FCM_REGISTRATION_KEY.toString())
+
+        if(USER_SPECIFIC_FCM_REGISTRATION_KEY!!.isNotEmpty() and USER_SPECIFIC_FCM_REGISTRATION_KEY!!.isNotBlank())
+        Firebase.messaging.subscribeToTopic(USER_SPECIFIC_FCM_REGISTRATION_KEY.toString())
+                .addOnCompleteListener { task ->
+                    if (!task.isSuccessful) {
+                        Log.d("UNABLE TO REGISTER TO", "SPECIFIC FCM STREAM")
+                    }
+                    Log.d("SUCCESSFULLY REG TO", "SPECIFIC FCM STREAM")
+                }
+
     }
 
     companion object {
